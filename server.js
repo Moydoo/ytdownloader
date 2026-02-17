@@ -23,7 +23,8 @@ const QUALITY_MAP = {
   "360": "bestvideo[height<=360]+bestaudio/best",
 };
 
-const BROWSERS = ["safari", "chrome", "firefox", "brave", "edge", "chromium", "opera"];
+// Chrome first — Safari's cookies are sandboxed on macOS and often cause permission errors
+const BROWSERS = ["chrome", "firefox", "brave", "edge", "chromium", "opera", "safari"];
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -86,7 +87,9 @@ function ytdlpWithFallback(args) {
           stderr.includes("Sign in to confirm") ||
           stderr.includes("bot") ||
           stderr.includes("cookies") ||
-          stderr.includes("403");
+          stderr.includes("403") ||
+          stderr.includes("Operation not permitted") ||
+          stderr.includes("Errno 1");
 
         if (isAuthError) return tryNext();
         reject(new Error(stderr || "yt-dlp failed"));
@@ -129,7 +132,9 @@ function ytdlpDownloadWithFallback(args, onData, onDone, onError) {
       const isAuthError = !hasProgress && (
         stderr.includes("Sign in to confirm") ||
         stderr.includes("bot") ||
-        stderr.includes("403")
+        stderr.includes("403") ||
+        stderr.includes("Operation not permitted") ||
+        stderr.includes("Errno 1")
       );
 
       if (isAuthError) {
