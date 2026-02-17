@@ -189,21 +189,14 @@ All downloads are saved to your `~/Downloads` folder (or `C:\Users\<you>\Downloa
 
 ## Troubleshooting
 
-**"Sign in to confirm you're not a bot" error**  
-This is YouTube's bot detection kicking in. The app will automatically try all your installed browsers (Safari, Chrome, Firefox, Brave, Edge) one by one to find working cookies. If all of them fail, here's what to do:
+**"Sign in to confirm you're not a bot" / all browsers fail**  
+The app automatically tries every browser installed on your computer (Safari, Chrome, Firefox, Brave, Edge…). If every single one fails, the app will show a **"We tried everything"** screen with step-by-step instructions:
 
-1. Open YouTube in your browser and make sure you're **logged in**
-2. Watch or interact with a video briefly — this refreshes your session
-3. Restart the app (`Ctrl+C` then `node server.js`) and try again
+1. Install the **[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)** extension in Chrome or Firefox (free, 30 seconds)
+2. Go to [youtube.com](https://youtube.com) while **logged in** → click the extension → click **Export** → save the file
+3. **Drag & drop** (or click to upload) the `cookies.txt` file directly into the app
 
-If it still fails, export cookies manually:
-- Install the **"Get cookies.txt LOCALLY"** extension in Chrome or Firefox
-- Go to YouTube while logged in → click the extension → click **Export**
-- Save the file as `cookies.txt` somewhere on your computer (e.g. `~/Downloads/cookies.txt`)
-- In the app's terminal, stop the server and run it with the cookie file directly:
-  ```bash
-  yt-dlp --cookies ~/Downloads/cookies.txt "YOUR_VIDEO_URL"
-  ```
+The app will save the file and automatically retry the download. From that point on it will always use the cookie file — you won't need to do this again unless your session expires.
 
 **403 Forbidden errors**  
 The app automatically tries cookies from all your installed browsers. If you're still getting 403s, make sure you're logged into YouTube in at least one browser and try again. See the bot detection fix above.

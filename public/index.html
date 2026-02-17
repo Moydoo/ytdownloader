@@ -360,6 +360,141 @@
     .log-line.done   { color: var(--accent); font-weight: 500; }
     .log-line.error  { color: var(--red); }
 
+    /* ── Auth-failed panel ── */
+    #auth-panel {
+      display: none;
+      margin-top: 24px;
+      border: 1px solid #ff474730;
+      border-radius: 14px;
+      overflow: hidden;
+      animation: fadeUp 0.4s ease both;
+    }
+
+    #auth-panel.visible { display: block; }
+
+    .auth-header {
+      background: #ff47470f;
+      border-bottom: 1px solid #ff474720;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .auth-header-icon {
+      font-size: 1.3rem;
+      line-height: 1;
+    }
+
+    .auth-header-text strong {
+      display: block;
+      font-size: 0.92rem;
+      font-weight: 700;
+      color: var(--red);
+    }
+
+    .auth-header-text span {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+
+    .auth-steps {
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .auth-step {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    .step-num {
+      width: 24px;
+      min-width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--border);
+      border: 1px solid var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 1px;
+    }
+
+    .step-body {
+      flex: 1;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: var(--text);
+    }
+
+    .step-body a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid #e8ff4740;
+    }
+
+    .step-body .step-note {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+
+    /* ── Cookie drop zone ── */
+    .drop-zone {
+      margin-top: 4px;
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: var(--accent);
+      background: #e8ff4708;
+    }
+
+    .drop-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .drop-zone-icon { font-size: 1.6rem; margin-bottom: 6px; }
+
+    .drop-zone-label {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    .drop-zone-label strong {
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    .drop-zone.uploaded {
+      border-color: var(--accent);
+      background: #e8ff4710;
+    }
+
+    .drop-zone.uploaded .drop-zone-icon::after { content: "✓"; }
+
     /* ── Done state ── */
     #done-banner {
       display: none;
@@ -474,6 +609,48 @@
       <div id="log"></div>
     </div>
 
+    <!-- Auth failed panel -->
+    <div id="auth-panel">
+      <div class="auth-header">
+        <div class="auth-header-icon">🚫</div>
+        <div class="auth-header-text">
+          <strong>We tried everything — YouTube blocked us</strong>
+          <span>All browsers failed authentication. Here's how to fix it in 3 steps.</span>
+        </div>
+      </div>
+      <div class="auth-steps">
+
+        <div class="auth-step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            Install the <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank">Get cookies.txt LOCALLY</a> extension in Chrome or Firefox.
+            <span class="step-note">It's free and takes about 30 seconds.</span>
+          </div>
+        </div>
+
+        <div class="auth-step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            Go to <a href="https://youtube.com" target="_blank">youtube.com</a> while logged in → click the extension icon → click <strong>Export</strong>. Save the file.
+            <span class="step-note">Make sure you're actually logged into your Google account first.</span>
+          </div>
+        </div>
+
+        <div class="auth-step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            Drop your <strong>cookies.txt</strong> file here — we'll use it automatically from now on.
+            <div class="drop-zone" id="drop-zone">
+              <input type="file" id="cookie-upload" accept=".txt" />
+              <div class="drop-zone-icon">📄</div>
+              <div class="drop-zone-label"><strong>Click or drag</strong> cookies.txt here</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
     <!-- Done -->
     <div id="done-banner">✓ Saved to ~/Downloads</div>
 
@@ -506,6 +683,62 @@
   const log           = document.getElementById("log");
   const doneBanner    = document.getElementById("done-banner");
   const qualityRow    = document.getElementById("quality-row");
+  const authPanel     = document.getElementById("auth-panel");
+  const dropZone      = document.getElementById("drop-zone");
+  const cookieUpload  = document.getElementById("cookie-upload");
+
+  // ── Cookie upload ──────────────────────────────────────────────────────────
+  async function uploadCookieFile(file) {
+    if (!file || !file.name.endsWith(".txt")) {
+      addLog("Please upload a .txt file.", "error");
+      return;
+    }
+
+    dropZone.classList.add("uploaded");
+    dropZone.querySelector(".drop-zone-label").innerHTML = `<strong>Uploading…</strong>`;
+
+    try {
+      const res = await fetch("/upload-cookies", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: file,
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error("Upload failed");
+
+      dropZone.querySelector(".drop-zone-icon").textContent = "✅";
+      dropZone.querySelector(".drop-zone-label").innerHTML =
+        `<strong>${file.name}</strong> uploaded — retrying download…`;
+
+      // Hide auth panel and retry automatically
+      setTimeout(() => {
+        authPanel.classList.remove("visible");
+        startDownload();
+      }, 1000);
+
+    } catch (e) {
+      addLog("Cookie upload failed: " + e.message, "error");
+      dropZone.classList.remove("uploaded");
+    }
+  }
+
+  cookieUpload.addEventListener("change", (e) => {
+    if (e.target.files[0]) uploadCookieFile(e.target.files[0]);
+  });
+
+  dropZone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropZone.classList.add("drag-over");
+  });
+
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("drag-over");
+    const file = e.dataTransfer.files[0];
+    if (file) uploadCookieFile(file);
+  });
 
   // ── Format toggle ──────────────────────────────────────────────────────────
   document.querySelectorAll(".fmt-btn").forEach(btn => {
@@ -547,7 +780,14 @@
       const res  = await fetch(`/info?url=${encodeURIComponent(url)}`);
       const data = await res.json();
 
-      if (!res.ok) throw new Error(data.error || "Failed");
+      if (!res.ok) {
+        if (data.error === "AUTH_FAILED") {
+          hideProgress();
+          authPanel.classList.add("visible");
+          return;
+        }
+        throw new Error(data.error || "Failed");
+      }
 
       thumb.src      = data.thumbnail;
       vidTitle.textContent = data.title;
@@ -607,6 +847,13 @@
         sse.close();
       }
 
+      if (msg.type === "auth_failed") {
+        hideProgress();
+        authPanel.classList.add("visible");
+        btnDownload.disabled = false;
+        sse.close();
+      }
+
       if (msg.type === "error") {
         addLog(msg.message, "error");
         btnDownload.disabled = false;
@@ -647,6 +894,7 @@
     preview.classList.remove("visible");
     btnDownload.classList.remove("visible");
     doneBanner.classList.remove("visible");
+    authPanel.classList.remove("visible");
     progressFill.style.width = "0%";
     progressFill.classList.add("indeterminate");
     statPercent.textContent = "—";
