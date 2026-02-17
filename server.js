@@ -9,7 +9,6 @@ const os = require("os");
 const app = express();
 const PORT = 3000;
 
-// Default download folder: ~/Downloads
 const DOWNLOAD_DIR = path.join(os.homedir(), "Downloads");
 
 const QUALITY_MAP = {
@@ -22,56 +21,146 @@ const QUALITY_MAP = {
   "360": "bestvideo[height<=360]+bestaudio/best",
 };
 
+// Browsers tried in order — skips any that aren't installed
+const BROWSERS = ["safari", "chrome", "firefox", "brave", "edge", "chromium", "opera"];
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+// ── Helper: try yt-dlp with each browser's cookies until one works ───────────
+function ytdlpWithFallback(args) {
+  return new Promise((resolve, reject) => {
+    let index = 0;
+
+    function tryNext() {
+      if (index >= BROWSERS.length) {
+        return reject(new Error(
+          "Could not authenticate with any browser. " +
+          "Make sure you are logged into YouTube in Chrome, Safari, or Firefox."
+        ));
+      }
+
+      const browser = BROWSERS[index++];
+      console.log(`  → Trying cookies from ${browser}…`);
+
+      const proc = spawn("yt-dlp", ["--cookies-from-browser", browser, ...args]);
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (d) => (stdout += d));
+      proc.stderr.on("data", (d) => (stderr += d));
+
+      proc.on("close", (code) => {
+        if (code === 0 && stdout.trim()) {
+          console.log(`  ✓ Success with ${browser}`);
+          return resolve({ stdout, browser });
+        }
+
+        const isAuthError =
+          stderr.includes("Sign in to confirm") ||
+          stderr.includes("bot") ||
+          stderr.includes("cookies") ||
+          stderr.includes("403");
+
+        if (isAuthError) {
+          tryNext(); // silently try next
+        } else {
+          reject(new Error(stderr || "yt-dlp failed"));
+        }
+      });
+
+      proc.on("error", () => tryNext()); // binary not found, skip
+    }
+
+    tryNext();
+  });
+}
+
+// ── Helper: streaming download with auto browser fallback ────────────────────
+function ytdlpDownloadWithFallback(args, onData, onDone, onError) {
+  let index = 0;
+  let hasProgress = false;
+  let killed = false;
+  let currentProc = null;
+
+  function tryNext() {
+    if (killed) return;
+    if (index >= BROWSERS.length) {
+      return onError("Could not authenticate with any browser. Make sure you're logged into YouTube in Chrome, Safari, or Firefox.");
+    }
+
+    const browser = BROWSERS[index++];
+    console.log(`  → Download: trying cookies from ${browser}…`);
+
+    const proc = spawn("yt-dlp", ["--cookies-from-browser", browser, ...args]);
+    currentProc = proc;
+    let stderr = "";
+
+    proc.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      if (text.includes("%")) hasProgress = true;
+      onData(text, browser);
+    });
+
+    proc.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+    proc.on("close", (code) => {
+      if (killed) return;
+      if (code === 0) return onDone(browser);
+
+      const isAuthError = !hasProgress && (
+        stderr.includes("Sign in to confirm") ||
+        stderr.includes("bot") ||
+        stderr.includes("403")
+      );
+
+      if (isAuthError) {
+        console.log(`  ✗ Auth failed with ${browser}, trying next…`);
+        hasProgress = false;
+        tryNext();
+      } else {
+        onError(stderr || "Download failed.");
+      }
+    });
+
+    proc.on("error", () => { if (!killed) tryNext(); });
+  }
+
+  tryNext();
+  return () => { killed = true; if (currentProc) currentProc.kill(); };
+}
+
 // ── GET /info?url=...  ──────────────────────────────────────────────────────
-// Returns video title + thumbnail without downloading
-app.get("/info", (req, res) => {
+app.get("/info", async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: "Missing url" });
 
-  const proc = spawn("yt-dlp", [
-    "--dump-json",
-    "--no-playlist",
-    "--cookies-from-browser", "chrome",
-    url,
-  ]);
+  try {
+    const { stdout, browser } = await ytdlpWithFallback([
+      "--dump-json", "--no-playlist", url,
+    ]);
 
-  let raw = "";
-  let err = "";
-
-  proc.stdout.on("data", (d) => (raw += d));
-  proc.stderr.on("data", (d) => (err += d));
-
-  proc.on("close", (code) => {
-    if (code !== 0 || !raw.trim()) {
-      return res.status(500).json({ error: err || "Could not fetch video info" });
-    }
-    try {
-      const info = JSON.parse(raw);
-      res.json({
-        title:     info.title,
-        thumbnail: info.thumbnail,
-        duration:  info.duration_string || "",
-        uploader:  info.uploader || "",
-        id:        info.id,
-      });
-    } catch {
-      res.status(500).json({ error: "Failed to parse video info" });
-    }
-  });
+    const info = JSON.parse(stdout);
+    res.json({
+      title:     info.title,
+      thumbnail: info.thumbnail,
+      duration:  info.duration_string || "",
+      uploader:  info.uploader || "",
+      id:        info.id,
+      browser,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── GET /download  (SSE stream) ─────────────────────────────────────────────
-// Streams progress events back to the browser via Server-Sent Events
 app.get("/download", (req, res) => {
   const { url, quality = "best", format = "mp4" } = req.query;
   if (!url) return res.status(400).end();
 
   const isMP3 = format === "mp3";
 
-  // SSE headers
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -80,93 +169,59 @@ app.get("/download", (req, res) => {
   const send = (type, data) =>
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
 
-  send("start", { message: `Starting download…` });
+  send("start", { message: "Finding working browser cookies…" });
 
-  let args;
+  const baseArgs = isMP3
+    ? [
+        "--no-playlist",
+        "--format", "bestaudio/best",
+        "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0",
+        "--output", path.join(DOWNLOAD_DIR, "%(title)s [%(id)s].%(ext)s"),
+        "--windows-filenames", "--newline", url,
+      ]
+    : [
+        "--no-playlist",
+        "--format", QUALITY_MAP[quality] || quality,
+        "--merge-output-format", "mp4",
+        "--output", path.join(DOWNLOAD_DIR, "%(title)s [%(id)s].%(ext)s"),
+        "--windows-filenames", "--newline", url,
+      ];
 
-  if (isMP3) {
-    // MP3: extract audio only, convert to mp3 via ffmpeg
-    args = [
-      "--no-playlist",
-      "--cookies-from-browser", "chrome",
-      "--format", "bestaudio/best",
-      "--extract-audio",
-      "--audio-format", "mp3",
-      "--audio-quality", "0",          // 0 = best quality VBR
-      "--output", path.join(DOWNLOAD_DIR, "%(title)s [%(id)s].%(ext)s"),
-      "--windows-filenames",
-      "--newline",
-      url,
-    ];
-  } else {
-    // MP4: video + audio merged
-    const fmt = QUALITY_MAP[quality] || quality;
-    args = [
-      "--no-playlist",
-      "--cookies-from-browser", "chrome",
-      "--format", fmt,
-      "--merge-output-format", "mp4",
-      "--output", path.join(DOWNLOAD_DIR, "%(title)s [%(id)s].%(ext)s"),
-      "--windows-filenames",
-      "--newline",
-      url,
-    ];
-  }
+  let notifiedBrowser = false;
 
-  const proc = spawn("yt-dlp", args);
-
-  // Parse yt-dlp's stdout for progress lines
-  proc.stdout.on("data", (chunk) => {
-    const lines = chunk.toString().split("\n");
-    for (const line of lines) {
-      if (!line.trim()) continue;
-
-      // Progress line: [download]  42.3% of  280.89MiB at  389.41KiB/s ETA 10:14
-      const progressMatch = line.match(
-        /\[download\]\s+([\d.]+)%.*?at\s+([\d.]+\s*\S+\/s).*?ETA\s+(\S+)/
-      );
-      if (progressMatch) {
-        send("progress", {
-          percent: parseFloat(progressMatch[1]),
-          speed:   progressMatch[2],
-          eta:     progressMatch[3],
-        });
-        continue;
+  const kill = ytdlpDownloadWithFallback(
+    baseArgs,
+    (text, browser) => {
+      if (!notifiedBrowser) {
+        send("info", { message: `Authenticated via ${browser}` });
+        notifiedBrowser = true;
       }
 
-      // Destination line
-      if (line.includes("[download] Destination:")) {
-        const filename = path.basename(line.replace("[download] Destination:", "").trim());
-        send("info", { message: `Saving: ${filename}` });
-        continue;
+      for (const line of text.split("\n")) {
+        if (!line.trim()) continue;
+
+        const m = line.match(/\[download\]\s+([\d.]+)%.*?at\s+([\d.]+\s*\S+\/s).*?ETA\s+(\S+)/);
+        if (m) { send("progress", { percent: parseFloat(m[1]), speed: m[2], eta: m[3] }); continue; }
+
+        if (line.includes("[download] Destination:")) {
+          send("info", { message: `Saving: ${path.basename(line.replace("[download] Destination:", "").trim())}` });
+        }
+        if (line.includes("Merging") || line.includes("ffmpeg")) {
+          send("info", { message: "Merging audio & video…" });
+        }
       }
-
-      // Merge line
-      if (line.includes("Merging") || line.includes("ffmpeg")) {
-        send("info", { message: "Merging audio & video…" });
-      }
-    }
-  });
-
-  proc.stderr.on("data", (chunk) => {
-    const text = chunk.toString();
-    // Only forward real errors, not verbose noise
-    if (text.includes("ERROR")) {
-      send("error", { message: text.trim() });
-    }
-  });
-
-  proc.on("close", (code) => {
-    if (code === 0) {
+    },
+    (browser) => {
       send("done", { message: `Saved to ~/Downloads as ${isMP3 ? "MP3" : "MP4"} ✓` });
-    } else {
-      send("error", { message: "Download failed. Check the terminal for details." });
+      res.end();
+    },
+    (errMsg) => {
+      send("error", { message: errMsg });
+      res.end();
     }
-    res.end();
-  });
+  );
 
-  // If client disconnects, kill the child process
-  req.on("close", () => proc.kill());
+  req.on("close", () => kill && kill());
 });
 
 app.listen(PORT, () => {
