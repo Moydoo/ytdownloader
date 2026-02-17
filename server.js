@@ -89,7 +89,9 @@ function ytdlpWithFallback(args) {
           stderr.includes("cookies") ||
           stderr.includes("403") ||
           stderr.includes("Operation not permitted") ||
-          stderr.includes("Errno 1");
+          stderr.includes("Errno 1") ||
+          stderr.includes("could not find") ||
+          stderr.includes("cookies database");
 
         if (isAuthError) return tryNext();
         reject(new Error(stderr || "yt-dlp failed"));
@@ -134,7 +136,9 @@ function ytdlpDownloadWithFallback(args, onData, onDone, onError) {
         stderr.includes("bot") ||
         stderr.includes("403") ||
         stderr.includes("Operation not permitted") ||
-        stderr.includes("Errno 1")
+        stderr.includes("Errno 1") ||
+        stderr.includes("could not find") ||
+        stderr.includes("cookies database")
       );
 
       if (isAuthError) {
