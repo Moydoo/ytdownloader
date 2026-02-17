@@ -189,8 +189,24 @@ All downloads are saved to your `~/Downloads` folder (or `C:\Users\<you>\Downloa
 
 ## Troubleshooting
 
+**"Sign in to confirm you're not a bot" error**  
+This is YouTube's bot detection kicking in. The app will automatically try all your installed browsers (Safari, Chrome, Firefox, Brave, Edge) one by one to find working cookies. If all of them fail, here's what to do:
+
+1. Open YouTube in your browser and make sure you're **logged in**
+2. Watch or interact with a video briefly — this refreshes your session
+3. Restart the app (`Ctrl+C` then `node server.js`) and try again
+
+If it still fails, export cookies manually:
+- Install the **"Get cookies.txt LOCALLY"** extension in Chrome or Firefox
+- Go to YouTube while logged in → click the extension → click **Export**
+- Save the file as `cookies.txt` somewhere on your computer (e.g. `~/Downloads/cookies.txt`)
+- In the app's terminal, stop the server and run it with the cookie file directly:
+  ```bash
+  yt-dlp --cookies ~/Downloads/cookies.txt "YOUR_VIDEO_URL"
+  ```
+
 **403 Forbidden errors**  
-The server uses Chrome cookies to authenticate with YouTube. Make sure Chrome is installed and you're logged into YouTube in it.
+The app automatically tries cookies from all your installed browsers. If you're still getting 403s, make sure you're logged into YouTube in at least one browser and try again. See the bot detection fix above.
 
 **`Cannot GET /`**  
 Make sure `index.html` is inside the `public/` subfolder, not loose in the root folder.
