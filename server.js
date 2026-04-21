@@ -26,6 +26,9 @@ const QUALITY_MAP = {
 // Chrome first — Safari's cookies are sandboxed on macOS and often cause permission errors
 const BROWSERS = ["chrome", "firefox", "brave", "edge", "chromium", "opera", "safari"];
 
+// Windows needs shell:true to resolve binaries like yt-dlp.exe from PATH
+const SPAWN_OPTS = { shell: process.platform === "win32" };
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -47,14 +50,21 @@ function ytdlpWithFallback(args) {
     // If a cookie file is already uploaded, use it directly — no browser loop
     if (hasCookieFile()) {
       console.log("  → Using uploaded cookies.txt");
-      const proc = spawn("yt-dlp", ["--cookies", COOKIES_PATH, ...args]);
+      const proc = spawn("yt-dlp", ["--cookies", COOKIES_PATH, ...args], SPAWN_OPTS);
       let stdout = "", stderr = "";
       proc.stdout.on("data", (d) => (stdout += d));
       proc.stderr.on("data", (d) => (stderr += d));
       proc.on("close", (code) => {
         if (code === 0 && stdout.trim()) return resolve({ stdout, browser: "cookies.txt" });
-        reject(new Error(stderr || "yt-dlp failed with cookie file"));
+        // Surface as AUTH_FAILED so the frontend can prompt for new cookies
+        reject(Object.assign(
+          new Error(stderr || "yt-dlp failed with cookie file"),
+          { authFailed: true }
+        ));
       });
+      proc.on("error", (e) =>
+        reject(Object.assign(new Error(e.message), { authFailed: true }))
+      );
       return;
     }
 
@@ -72,7 +82,7 @@ function ytdlpWithFallback(args) {
       const browser = BROWSERS[index++];
       console.log(`  → Trying cookies from ${browser}…`);
 
-      const proc = spawn("yt-dlp", ["--cookies-from-browser", browser, ...args]);
+      const proc = spawn("yt-dlp", ["--cookies-from-browser", browser, ...args], SPAWN_OPTS);
       let stdout = "", stderr = "";
       proc.stdout.on("data", (d) => (stdout += d));
       proc.stderr.on("data", (d) => (stderr += d));
@@ -115,7 +125,7 @@ function ytdlpDownloadWithFallback(args, onData, onDone, onError) {
     if (killed) return;
     console.log(`  → Download: trying ${label}…`);
 
-    const proc = spawn("yt-dlp", [...cookieArgList, ...args]);
+    const proc = spawn("yt-dlp", [...cookieArgList, ...args], SPAWN_OPTS);
     currentProc = proc;
     let stderr = "";
 
@@ -144,13 +154,17 @@ function ytdlpDownloadWithFallback(args, onData, onDone, onError) {
       if (isAuthError) {
         console.log(`  ✗ Auth failed with ${label}`);
         hasProgress = false;
+        // If we were already using the cookie file, don't loop — surface the error
+        if (label === "cookies.txt") {
+          return onError("AUTH_FAILED");
+        }
         tryNext();
       } else {
         onError(stderr || "Download failed.");
       }
     });
 
-    proc.on("error", () => { if (!killed) tryNext(); });
+    proc.on("error", () => { if (!killed) { if (label === "cookies.txt") onError("AUTH_FAILED"); else tryNext(); } });
   }
 
   function tryNext() {
@@ -234,14 +248,20 @@ app.get("/download", (req, res) => {
 
   send("start", { message: "Finding working browser cookies…" });
 
+  // On Windows, spawn uses cmd.exe which joins args with spaces — the output
+  // template contains a space ("%(title)s [%(id)s].%(ext)s"), so it must be
+  // quoted or cmd.exe splits it and yt-dlp treats the tail as a URL.
+  const outputTemplate = path.join(DOWNLOAD_DIR, "%(title)s [%(id)s].%(ext)s");
+  const outputArg = process.platform === "win32" ? `"${outputTemplate}"` : outputTemplate;
+
   const baseArgs = isMP3
     ? ["--no-playlist", "--format", "bestaudio/best",
        "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0",
-       "--output", path.join(DOWNLOAD_DIR, "%(title)s [%(id)s].%(ext)s"),
+       "--output", outputArg,
        "--windows-filenames", "--newline", url]
     : ["--no-playlist", "--format", QUALITY_MAP[quality] || quality,
        "--merge-output-format", "mp4",
-       "--output", path.join(DOWNLOAD_DIR, "%(title)s [%(id)s].%(ext)s"),
+       "--output", outputArg,
        "--windows-filenames", "--newline", url];
 
   let notifiedBrowser = false;
